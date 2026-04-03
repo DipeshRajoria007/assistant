@@ -7,12 +7,15 @@ import {
 	formatResponse,
 	parseCommand,
 } from "./cli/formatter.js";
+import { speak } from "./cli/speech.js";
 import { captureVoiceInput, isVoiceAvailable } from "./cli/voice.js";
 import { createAgentState, processMessage, trimConversation } from "./core/agent-loop.js";
 import { detectCLIs, getCLIs, loadConfig } from "./core/config.js";
 import { createLogger, setLogLevel } from "./core/logger.js";
 
 const log = createLogger("main");
+
+let speakEnabled = false;
 
 async function initDaemon() {
 	const config = loadConfig();
@@ -68,6 +71,10 @@ async function sendMessage(
 		const actionOutput = formatActions(response.actions);
 		if (actionOutput) write(actionOutput);
 		trimConversation(state);
+
+		if (speakEnabled) {
+			await speak(response.message);
+		}
 	} catch (error) {
 		write(formatError(error instanceof Error ? error.message : String(error)));
 	}
@@ -124,6 +131,11 @@ async function handleCommand(
 			return true;
 		case "voice":
 			await handleVoice(state);
+			return true;
+		case "speak":
+			speakEnabled = !speakEnabled;
+			write(`\nVoice output ${speakEnabled ? "ON" : "OFF"}.\n\n`);
+			if (speakEnabled) await speak("Voice output enabled.");
 			return true;
 		case "unknown":
 			write(formatError(`Unknown command: ${cmd.raw}. Type /help for commands.`));

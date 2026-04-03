@@ -24,6 +24,7 @@ ${BOLD}Commands:${RESET}
   ${CYAN}/history${RESET}   Show recent conversation history
   ${CYAN}/clear${RESET}     Clear conversation and start fresh
   ${CYAN}/voice${RESET}     Push-to-talk: record and transcribe speech
+  ${CYAN}/speak${RESET}     Toggle voice output (speaks responses aloud)
   ${CYAN}/quit${RESET}      Exit the assistant
 
 ${BOLD}Tips:${RESET}
@@ -39,6 +40,7 @@ export type CLICommand =
 	| { type: "history" }
 	| { type: "clear" }
 	| { type: "voice" }
+	| { type: "speak" }
 	| { type: "message"; raw: string }
 	| { type: "unknown"; raw: string }
 	| { type: "empty" };
@@ -71,6 +73,9 @@ export function parseCommand(input: string): CLICommand {
 			case "/voice":
 			case "/v":
 				return { type: "voice" };
+			case "/speak":
+			case "/sp":
+				return { type: "speak" };
 			default:
 				return { type: "unknown", raw: trimmed };
 		}

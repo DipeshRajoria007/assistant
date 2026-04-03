@@ -3,13 +3,9 @@ import { createLogger } from "./logger.js";
 
 const log = createLogger("model-router");
 
-/** Task complexity determines which CLI/model handles the request */
 export type TaskComplexity = "triage" | "simple" | "complex" | "code";
-
-/** Which CLI to use */
 export type CLIProvider = "claude" | "codex";
 
-/** Message format for conversations */
 export interface ChatMessage {
 	role: "user" | "assistant" | "system";
 	content: string;
@@ -21,11 +17,13 @@ export interface RouterResponse {
 	durationMs: number;
 }
 
-/** Classify how complex a task is — determines routing */
+/** Callback for streaming text chunks */
+export type StreamCallback = (chunk: string) => void;
+
+/** Classify task complexity for routing */
 export function classifyComplexity(input: string): TaskComplexity {
 	const lower = input.toLowerCase();
 
-	// Triage: yes/no questions, classifications, simple lookups
 	const triagePatterns = [
 		/^(is|are|was|were|do|does|did|can|could|should|will|would)\s/,
 		/^(what time|what date|what day)/,
@@ -36,7 +34,6 @@ export function classifyComplexity(input: string): TaskComplexity {
 		return "triage";
 	}
 
-	// Complex: multi-step, planning, reasoning, long inputs (checked before code)
 	const complexPatterns = [
 		/\b(plan|design|architect|analyze|compare|evaluate)\b/,
 		/\b(step.by.step|break.down|think.through|figure.out)\b/,
@@ -47,12 +44,11 @@ export function classifyComplexity(input: string): TaskComplexity {
 		return "complex";
 	}
 
-	// Code tasks: writing, fixing, reviewing code
 	const codePatterns = [
 		/\b(write|create|generate|implement)\b.*\b(code|function|class|component|module|test|file)\b/,
 		/\b(fix|debug|patch|refactor)\b.*\b(bug|error|code|function)\b/,
 		/\b(review|optimize)\b.*\b(code|pull request|pr|diff)\b/,
-		/```/, // contains code blocks
+		/```/,
 	];
 	if (codePatterns.some((p) => p.test(lower))) {
 		return "code";
@@ -61,16 +57,20 @@ export function classifyComplexity(input: string): TaskComplexity {
 	return "simple";
 }
 
-/** Get which CLI provider to use for a given complexity */
 export function getProviderForComplexity(complexity: TaskComplexity): CLIProvider {
 	const config = getConfig();
 	return config.routing[complexity];
 }
 
-/** Send a message to the appropriate CLI based on complexity */
+/**
+ * Send a message with streaming output.
+ * The onChunk callback is called for each text fragment as it arrives,
+ * giving the user real-time feedback instead of waiting for the full response.
+ */
 export async function routeMessage(
 	messages: ChatMessage[],
 	complexity?: TaskComplexity,
+	onChunk?: StreamCallback,
 ): Promise<RouterResponse> {
 	const lastUserMessage = messages.findLast((m: ChatMessage) => m.role === "user");
 	const autoComplexity = complexity ?? classifyComplexity(lastUserMessage?.content ?? "");
@@ -78,71 +78,124 @@ export async function routeMessage(
 
 	log.info(`Routing to ${provider}`, { complexity: autoComplexity });
 
-	const start = performance.now();
-
-	// Build the prompt from messages
 	const systemMessage = messages.find((m) => m.role === "system");
 	const prompt = buildPrompt(messages, systemMessage?.content);
 
-	const content = await callCLI(provider, prompt);
+	const start = performance.now();
+	const content = await callCLI(provider, prompt, onChunk);
 	const durationMs = Math.round(performance.now() - start);
 
 	log.info("Response received", { provider, durationMs });
-
 	return { content, provider, durationMs };
 }
 
-/** Build a single prompt string from conversation messages */
 function buildPrompt(messages: ChatMessage[], systemPrompt?: string): string {
 	const parts: string[] = [];
+	if (systemPrompt) parts.push(systemPrompt);
 
-	if (systemPrompt) {
-		parts.push(systemPrompt);
-	}
-
-	// Include recent conversation context (last few exchanges)
-	const conversationMessages = messages.filter((m) => m.role !== "system").slice(-6);
-	for (const msg of conversationMessages) {
+	const recent = messages.filter((m) => m.role !== "system").slice(-6);
+	for (const msg of recent) {
 		if (msg.role === "user") {
 			parts.push(msg.content);
 		} else if (msg.role === "assistant") {
 			parts.push(`[Previous response]: ${msg.content.slice(0, 500)}`);
 		}
 	}
-
 	return parts.join("\n\n");
 }
 
-/** Call a CLI tool and return the response text */
-async function callCLI(provider: CLIProvider, prompt: string): Promise<string> {
+async function callCLI(
+	provider: CLIProvider,
+	prompt: string,
+	onChunk?: StreamCallback,
+): Promise<string> {
 	const clis = getCLIs();
-
 	if (provider === "claude") {
-		return callClaude(clis.claude, prompt);
+		return callClaudeStreaming(clis.claude, prompt, onChunk);
 	}
 	return callCodex(clis.codex, prompt);
 }
 
-async function callClaude(binaryPath: string | null, prompt: string): Promise<string> {
+interface StreamState {
+	lastTextSeen: string;
+	fullContent: string;
+}
+
+function extractTextChunks(
+	content: Array<{ type: string; text?: string }>,
+	state: StreamState,
+	onChunk?: StreamCallback,
+): void {
+	for (const block of content) {
+		if (block.type !== "text" || !block.text) continue;
+		const newText = block.text.slice(state.lastTextSeen.length);
+		if (newText && onChunk) onChunk(newText);
+		state.lastTextSeen = block.text;
+	}
+}
+
+/** Process a single stream-json line, extracting text chunks and results */
+function processStreamLine(line: string, state: StreamState, onChunk?: StreamCallback): void {
+	if (!line.trim()) return;
+	try {
+		const data = JSON.parse(line);
+		if (data.type === "assistant" && data.message?.content) {
+			extractTextChunks(data.message.content, state, onChunk);
+		}
+		if (data.type === "result") {
+			state.fullContent = (data.result as string) ?? "";
+		}
+	} catch {
+		// Skip unparseable lines
+	}
+}
+
+/** Read lines from a ReadableStream, calling handler for each */
+async function readStreamLines(
+	stream: ReadableStream<Uint8Array>,
+	handler: (line: string) => void,
+): Promise<void> {
+	const reader = stream.getReader();
+	const decoder = new TextDecoder();
+	let buffer = "";
+
+	while (true) {
+		const { done, value } = await reader.read();
+		if (done) break;
+		buffer += decoder.decode(value, { stream: true });
+		const lines = buffer.split("\n");
+		buffer = lines.pop() ?? "";
+		for (const line of lines) handler(line);
+	}
+}
+
+/**
+ * Call Claude CLI with streaming JSON output.
+ * Parses assistant message chunks in real-time and calls onChunk for each.
+ */
+async function callClaudeStreaming(
+	binaryPath: string | null,
+	prompt: string,
+	onChunk?: StreamCallback,
+): Promise<string> {
 	if (!binaryPath) {
 		throw new Error("Claude CLI not found. Install it from https://claude.ai/download");
 	}
 
-	const proc = Bun.spawn([binaryPath, "-p", "--output-format", "text", prompt], {
-		stdout: "pipe",
-		stderr: "pipe",
-	});
+	const proc = Bun.spawn(
+		[binaryPath, "-p", "--output-format", "stream-json", "--verbose", "--model", "sonnet", prompt],
+		{ stdout: "pipe", stderr: "pipe" },
+	);
+
+	const state = { lastTextSeen: "", fullContent: "" };
+	await readStreamLines(proc.stdout, (line) => processStreamLine(line, state, onChunk));
 
 	const exitCode = await proc.exited;
-	const stdout = await new Response(proc.stdout).text();
-	const stderr = await new Response(proc.stderr).text();
-
-	if (exitCode !== 0) {
-		log.error("Claude CLI failed", { exitCode, stderr });
-		throw new Error(`Claude CLI exited with code ${exitCode}: ${stderr.slice(0, 200)}`);
+	if (exitCode !== 0 && !state.fullContent) {
+		throw new Error(`Claude CLI exited with code ${exitCode}`);
 	}
 
-	return stdout.trim();
+	return state.fullContent;
 }
 
 async function callCodex(binaryPath: string | null, prompt: string): Promise<string> {
@@ -151,44 +204,33 @@ async function callCodex(binaryPath: string | null, prompt: string): Promise<str
 	}
 
 	const proc = Bun.spawn([binaryPath, "exec", prompt], { stdout: "pipe", stderr: "pipe" });
-
 	const exitCode = await proc.exited;
 	const stdout = await new Response(proc.stdout).text();
 	const stderr = await new Response(proc.stderr).text();
 
 	if (exitCode !== 0) {
-		log.error("Codex CLI failed", { exitCode, stderr });
+		log.error("Codex CLI failed", { exitCode, stderr: stderr.slice(0, 200) });
 		throw new Error(`Codex CLI exited with code ${exitCode}: ${stderr.slice(0, 200)}`);
 	}
 
-	// Codex output includes metadata — extract just the response
 	return parseCodexOutput(stdout);
 }
 
-/** Extract the actual response from Codex CLI output (strips metadata) */
 function parseCodexOutput(raw: string): string {
-	// Codex output has headers and a "codex\n" prefix before actual content
 	const lines = raw.split("\n");
-
-	// Find where actual content starts (after "codex" line or metadata)
 	let contentStart = 0;
 	for (let i = 0; i < lines.length; i++) {
-		const line = lines[i];
-		if (line === "codex") {
+		if (lines[i] === "codex") {
 			contentStart = i + 1;
 			break;
 		}
 	}
-
-	// Find where content ends (before "tokens used" or similar footer)
 	let contentEnd = lines.length;
 	for (let i = lines.length - 1; i >= contentStart; i--) {
-		const line = lines[i];
-		if (line === "tokens used" || line?.startsWith("tokens used")) {
+		if (lines[i] === "tokens used" || lines[i]?.startsWith("tokens used")) {
 			contentEnd = i;
 			break;
 		}
 	}
-
 	return lines.slice(contentStart, contentEnd).join("\n").trim();
 }

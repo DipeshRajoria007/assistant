@@ -1,285 +1,142 @@
-# Assistant
+# Assistant (Archived)
 
-**An autonomous personal AI assistant for macOS — like Jarvis, built from scratch.**
+> **Status: Scrapped.** This project was an attempt to build a Jarvis-like autonomous personal AI assistant for macOS from scratch. It was abandoned after one session because the architecture was over-engineered and the core experience was fundamentally slow.
 
-Security-first. Cost-efficient. Production-grade. No API keys needed.
+---
 
-```
-You:     "What am I working on?"
-Jarvis:  "You're in VS Code editing agent-loop.ts on branch feat/memory.
-          You have 3 uncommitted changes. Design Review starts in 25 min."
+## What This Was
 
-You:     "Message the team I'll be 5 minutes late"
-Jarvis:  [Opens Slack → sends message → confirms]
-         "Done. Sent to #team."
-```
+An autonomous personal AI assistant for macOS — like Jarvis from Iron Man. Security-first, cost-efficient, built from scratch as an alternative to [OpenClaw](https://github.com/openclaw/openclaw).
 
-## Why Not OpenClaw?
+The thesis: OpenClaw proved massive demand (250k+ GitHub stars in 2026) but had critical security flaws (824+ malicious skills, 6 CVEs), absurd costs ($300-750/month), and stability issues (13 breaking releases in one month). We could build something better.
 
-[OpenClaw](https://github.com/openclaw/openclaw) proved the demand (250k+ GitHub stars) but has critical issues:
+## What We Built
 
-| Problem | OpenClaw | Assistant |
-|---------|----------|-----------|
-| Cost | $300-750/month API bills | **$0** — uses your existing Claude Code + Codex CLI |
-| Security | 824+ malicious skills, 6 CVEs | Sandboxed execution, graduated trust, audit log |
-| Memory | 1-3M tokens/session, forgets between chats | Smart context pruning, persistent memory |
-| Stability | 13 releases/month, each breaks something | Strict TypeScript, 92 tests, quality gate |
-| Setup | Hours of configuration | Works out of the box |
+Built in a single session with Claude Code (Opus 4.6). The codebase reached:
 
-## How It Works
+- **139 passing tests** across 13 test files
+- **6 merged PRs** to main
+- TypeScript strict mode, Biome linting, full quality gate
+- ~4,500 lines of code across 32 files
 
-```
-┌─────────────────────────────────────────────────────────┐
-│  YOU (voice / hotkey / terminal)                         │
-└────────────────────────┬────────────────────────────────┘
-                         │
-┌────────────────────────▼────────────────────────────────┐
-│  CONTEXT ENGINE                                          │
-│  Active app · Git state · Calendar · Clipboard · Files   │
-└────────────────────────┬────────────────────────────────┘
-                         │
-┌────────────────────────▼────────────────────────────────┐
-│  BRAIN (Agent Loop)                                      │
-│                                                          │
-│  ┌──────────────┐  ┌──────────────┐  ┌───────────────┐  │
-│  │ Model Router │  │ Memory Store │  │ Safety Gate   │  │
-│  │ Claude ↔     │  │ Knowledge    │  │ Classify      │  │
-│  │ Codex CLI    │  │ Episodes     │  │ Approve/Block │  │
-│  │              │  │ Goals        │  │ Audit log     │  │
-│  └──────────────┘  └──────────────┘  └───────────────┘  │
-└────────────────────────┬────────────────────────────────┘
-                         │
-┌────────────────────────▼────────────────────────────────┐
-│  ACTION LAYER                                            │
-│  Shell · AppleScript · Accessibility · Vision · APIs     │
-└─────────────────────────────────────────────────────────┘
-```
+### Completed Features
 
-**No API keys required.** Routes tasks to your installed CLIs:
+| # | Feature | PR | What It Did |
+|---|---------|-----|-------------|
+| 1 | CLI chat mode | [#1](https://github.com/DipeshRajoria007/assistant/pull/1) | Interactive REPL with commands (/help, /status, /voice, /speak), colored output |
+| 2 | Global hotkey | [#2](https://github.com/DipeshRajoria007/assistant/pull/2) | Swift binary monitoring Ctrl+Space globally, activates terminal from anywhere |
+| 3 | Voice input | [#3](https://github.com/DipeshRajoria007/assistant/pull/3), [#5](https://github.com/DipeshRajoria007/assistant/pull/5) | Swift SFSpeechRecognizer + ffmpeg fallback for speech-to-text |
+| 4 | Voice output | [#4](https://github.com/DipeshRajoria007/assistant/pull/4) | macOS `say` TTS with markdown stripping, /speak toggle |
+| 5 | Streaming responses | [#6](https://github.com/DipeshRajoria007/assistant/pull/6) | Real-time token streaming via Claude CLI stream-json output |
 
-| Task Type | CLI | Example |
-|-----------|-----|---------|
-| Reasoning | `claude -p` | "Plan the API migration" |
-| Simple | `claude -p` | "What's on my calendar?" |
-| Code | `codex exec` | "Write a sort function" |
+### Completed Infrastructure
+
+- **Agent loop** — perception/reasoning/action cycle with conversation management
+- **Model router** — routes tasks to Claude Code CLI or Codex CLI by complexity (triage/simple/complex/code)
+- **Safety gate** — classifies actions into 5 safety levels (SAFE → BLOCKED), graduated approval, blocks dangerous commands like `sudo rm -rf /`
+- **Shell executor** — runs commands via Bun.spawn with timeout, output truncation, safety pre-check
+- **Memory store** — SQLite schema for knowledge, episodes, and goals (never got to actually using it)
+- **Audit log** — immutable action history (schema only, never wired in)
+- **Context assembler** — builds minimal LLM prompts from context (never received real context)
 
 ## Tech Stack
 
-| Layer | Technology | Why |
-|-------|-----------|-----|
-| Runtime | **Bun** + TypeScript (strict) | 2x faster than Node, half memory, built-in SQLite |
-| macOS UI | **Swift** + SwiftUI | Native menu bar, 30MB RAM, full OS API access |
-| Storage | **SQLite** (bun:sqlite) | Zero config, single file, vector search ready |
-| Skill Sandbox | **Deno** subprocesses | Built-in permission model per skill |
-| LLM | **Claude Code** + **Codex CLI** | No API keys — uses your existing subscriptions |
-| Lint | **Biome** | 25x faster than ESLint |
-| Tests | **Bun test** (built-in) | Native, fast, zero config |
+| Layer | Technology |
+|-------|-----------|
+| Runtime | Bun 1.3.11 + TypeScript (strict) |
+| macOS Native | Swift 6.2.3 (hotkey daemon, voice binary) |
+| Storage | SQLite via bun:sqlite |
+| LLM | Claude Code CLI (`claude -p`) + Codex CLI (`codex exec`) |
+| Lint | Biome |
+| Tests | Bun built-in test runner |
 
-## Quick Start
+## Why It Was Scrapped
 
-```bash
-# Prerequisites: Bun, Claude Code CLI, Codex CLI
-bun install
-bun run dev
-```
+### The Core Problem: Latency
 
-## Development
+The project was designed around shelling out to the Claude Code CLI (`claude -p "message"`) and Codex CLI (`codex exec "message"`) instead of using API keys directly. This was a deliberate choice — the user had Pro subscriptions to both but no standalone API keys.
 
-```bash
-bun run check       # Full quality gate: typecheck → lint → test → build
-bun run dev         # Start daemon in dev mode with watch
-bun run test        # Run all tests
-bun run typecheck   # TypeScript strict checking
-bun run lint        # Biome lint + format check
-bun run build       # Build for distribution
-```
+**The result: every single message took 5-6 seconds.**
 
-**Development rules:** TDD, strict TypeScript, `bun run check` must pass before every commit. See [CLAUDE.md](CLAUDE.md) for full development guidelines.
+- ~3-4 seconds: Claude CLI startup (Node.js init, hook execution, MCP server connections, auth)
+- ~2 seconds: actual API call
 
-## Project Structure
+For a "Jarvis" experience, you need sub-second responses. 5-6 seconds makes the assistant feel dead. Streaming (PR #6) helped — text starts appearing at ~2-3 seconds — but the fundamental startup overhead per message was unavoidable without an API key.
+
+We investigated alternatives:
+- **`--bare` mode**: Disables hooks/MCP but requires `ANTHROPIC_API_KEY` (which we didn't have)
+- **Persistent session via `--input-format stream-json`**: The stream-json input format didn't process messages — only hooks ran, no responses were generated
+- **MCP server mode (`claude mcp serve`)**: Exposes Claude Code's tools (Bash, Read, Edit) but not a chat/query interface
+- **Session resume (`--resume`)**: Still incurs full CLI startup overhead each time
+
+None of these solved the fundamental problem.
+
+### The Secondary Problem: Over-Engineering
+
+We spent the session building infrastructure instead of a working product:
+
+- Safety gate with 5 trust levels, 20+ blocked command patterns, and an approval matrix — before we could even send a message
+- Zod schema validation for configs — before we had anything to configure
+- 139 tests — for features the user never actually experienced
+- PR ceremony for every feature — 6 PRs in one session for what should have been rapid prototyping
+- Type definitions for 4 executor types (shell, AppleScript, accessibility, vision) — only shell was ever built
+
+The right approach would have been: one file, 200 lines, that does something impressive. Instead we built a framework.
+
+### The Tertiary Problem: Voice Was Broken
+
+- The Swift SFSpeechRecognizer binary crashed (SIGABRT) in CLI environments because macOS TCC won't grant mic/speech permissions to unbundled executables
+- The ffmpeg fallback worked but required recording 10 seconds of audio, saving to disk, then spawning Claude CLI to transcribe — adding 15+ seconds to every voice interaction
+- Neither approach was remotely "real-time"
+
+## What Would Have Worked Better
+
+1. **Get an API key.** Even $5 of Anthropic credit would have eliminated the latency problem entirely. Direct API calls return first tokens in ~500ms.
+
+2. **Build lean, not correct.** One TypeScript file. No types, no tests, no safety gates. Just: detect active app via AppleScript, read git status, read clipboard, send to Claude API, stream response. Get to the "wow" moment first, then add structure.
+
+3. **Use existing tools as building blocks.** Instead of building a CLI from scratch, extend Claude Code itself via hooks/skills/MCP servers. The infrastructure is already there.
+
+## Lessons Learned
+
+- **Latency is the product.** For an interactive assistant, response time matters more than architecture, safety, or test coverage. A fast, unsafe prototype beats a slow, correct framework.
+- **CLI wrappers add latency, not value.** Shelling out to `claude -p` per message is fundamentally wrong for real-time use. You need a persistent connection or direct API access.
+- **Don't build the framework before the demo.** 139 tests for a product no one could use. The safety gate was perfect; the experience was terrible.
+- **Over-engineering is a trap when vibing.** TDD, strict TypeScript, Biome linting, PR-per-feature — all good practices, but not for a single-session prototype where the goal is to *feel* something working.
+
+## Project Structure (Final State)
 
 ```
 src/
-├── index.ts                    # Entry point — daemon startup
+├── cli/
+│   ├── formatter.ts        # CLI commands, colors, response formatting
+│   ├── speech.ts           # macOS TTS via say command
+│   └── voice.ts            # Voice input (Swift + ffmpeg fallback)
 ├── core/
-│   ├── agent-loop.ts           # Perception → Reasoning → Action cycle
-│   ├── model-router.ts         # Routes to Claude/Codex CLI by task type
-│   ├── config.ts               # Config + CLI auto-detection
-│   └── logger.ts               # Structured logging
-├── memory/
-│   └── store.ts                # SQLite: knowledge, episodes, goals
-├── context/
-│   └── assembler.ts            # Fuses context into minimal LLM prompt
+│   ├── agent-loop.ts       # Main conversation loop
+│   ├── config.ts           # Config + CLI auto-detection
+│   ├── logger.ts           # Structured logging
+│   └── model-router.ts     # Routes to Claude/Codex CLI with streaming
 ├── actions/
-│   ├── safety-gate.ts          # Action classification + approval
-│   ├── audit-log.ts            # Immutable action history
-│   ├── executor.ts             # Dispatches to appropriate executor
-│   └── executors/
-│       └── shell.ts            # Shell command execution
-├── skills/                     # (planned) Deno-sandboxed plugins
-├── ipc/                        # (planned) Unix socket server
-└── types/                      # TypeScript type definitions
+│   ├── executor.ts         # Action dispatch
+│   ├── executors/shell.ts  # Shell command execution
+│   ├── safety-gate.ts      # Action classification + approval
+│   └── audit-log.ts        # Immutable action history
+├── memory/store.ts         # SQLite: knowledge, episodes, goals
+├── context/assembler.ts    # Context → prompt assembly
+├── types/                  # TypeScript type definitions
+└── index.ts                # Entry point / REPL
 
-tests/
-├── unit/                       # 85+ unit tests
-└── integration/                # End-to-end executor tests
+macos/
+├── hotkey-daemon.swift     # Global Ctrl+Space hotkey
+├── voice-input.swift       # SFSpeechRecognizer STT
+├── build.sh                # Compile Swift binaries
+├── install.sh              # Register LaunchAgent
+└── uninstall.sh            # Remove LaunchAgent
 
-macos/                          # (planned) Swift menu bar app
+tests/                      # 139 tests across 13 files
 ```
-
----
-
-## Roadmap
-
-### Phase 1: Make It Usable — *"Talk To It"*
-
-> Goal: You can invoke the assistant and get intelligent responses.
-
-| # | Feature | Description | Status |
-|---|---------|-------------|--------|
-| 1 | CLI chat mode | Interactive REPL with commands, colors, safety display | ✅ Done |
-| 2 | Global hotkey invoke | Ctrl+Space from anywhere activates assistant | ✅ Done |
-| 3 | Voice input | Push-to-talk with on-device Apple Speech Recognition | ✅ Done |
-| 4 | Voice output | Speaks responses via macOS `say` with /speak toggle | ✅ Done |
-
-### Phase 2: Give It Eyes — *"Know What I'm Doing"*
-
-> Goal: The assistant understands your current context without you telling it.
-
-| # | Feature | Description | Status |
-|---|---------|-------------|--------|
-| 5 | Active app detector | Knows which app is in focus (VS Code, Safari, Slack) | ⬜ Planned |
-| 6 | Active file/URL tracker | Current file in editor, current URL in browser | ⬜ Planned |
-| 7 | Git state awareness | Branch, dirty files, recent commits, unpushed changes | ⬜ Planned |
-| 8 | Calendar integration | Upcoming events from macOS Calendar | ⬜ Planned |
-| 9 | Clipboard awareness | Knows what you just copied | ⬜ Planned |
-
-### Phase 3: Give It Hands — *"Do Things On My Mac"*
-
-> Goal: The assistant can control your Mac — open apps, send messages, manage files.
-
-| # | Feature | Description | Status |
-|---|---------|-------------|--------|
-| 10 | AppleScript executor | Run AppleScript/JXA to control any app | ⬜ Planned |
-| 11 | App launcher/switcher | Open, activate, close any application | ⬜ Planned |
-| 12 | Notification sender | Push native macOS notifications | ⬜ Planned |
-| 13 | File operations | Create, move, find files via Spotlight | ⬜ Planned |
-| 14 | Browser control | Open URLs, read current tab info | ⬜ Planned |
-
-### Phase 4: Give It Memory — *"Know Who I Am"*
-
-> Goal: The assistant learns about you and maintains context across sessions.
-
-| # | Feature | Description | Status |
-|---|---------|-------------|--------|
-| 15 | Auto-learn from conversations | Extracts preferences/knowledge and persists them | ⬜ Planned |
-| 16 | Goal tracking | Persistent multi-day goals that survive across sessions | ⬜ Planned |
-| 17 | Session history | Records what happened each session as episodes | ⬜ Planned |
-| 18 | Context injection | Auto-prepends relevant memory + context to every LLM call | ⬜ Planned |
-
-### Phase 5: Make It Alive — *"Always-On + Proactive"*
-
-> Goal: The assistant runs in the background, monitors your world, and acts proactively.
-
-| # | Feature | Description | Status |
-|---|---------|-------------|--------|
-| 19 | Background daemon | Runs as macOS LaunchAgent — always on | ⬜ Planned |
-| 20 | Event-driven wake | Reacts to app switches, file saves, calendar alerts | ⬜ Planned |
-| 21 | Proactive alerts | "Meeting in 10 min" / "Build failed" / "PR needs review" | ⬜ Planned |
-| 22 | IPC server | Unix socket so CLI, menu bar, and voice can all connect | ⬜ Planned |
-
-### Foundation (Complete)
-
-| Feature | Status |
-|---------|--------|
-| Agent loop (perception → reasoning → action) | ✅ Done |
-| Model router (Claude + Codex CLI, routes by task type) | ✅ Done |
-| Safety gate (classifies, approves/blocks, graduated trust) | ✅ Done |
-| Shell executor (runs commands, timeout, output truncation) | ✅ Done |
-| Memory store (SQLite: knowledge, episodes, goals) | ✅ Done |
-| Audit log (immutable action history) | ✅ Done |
-| Context assembler (fuses context into prompts) | ✅ Done |
-| 92 tests, TypeScript strict, Biome lint, quality gate | ✅ Done |
-
----
-
-## Build Plan
-
-```
-WEEK 1 — Can Talk To It + Basic Context
-├── Polish CLI chat mode (#1)
-├── Active app detector (#5) — AppleScript one-liner
-├── Git state awareness (#7) — shell out to git
-├── Clipboard awareness (#9) — pbpaste
-├── AppleScript executor (#10)
-└── App launcher/switcher (#11)
-
-WEEK 2 — Full Context + Mac Control
-├── Active file/URL tracker (#6)
-├── Calendar integration (#8)
-├── File operations (#13)
-├── Browser control (#14)
-├── Context injection into prompts (#18)
-└── Notification sender (#12)
-
-WEEK 3 — Persistent Memory + Voice
-├── Auto-learn from conversations (#15)
-├── Goal tracking (#16)
-├── Session history (#17)
-└── Voice output via macOS say (#4)
-
-WEEK 4 — Always-On Daemon
-├── Background daemon as LaunchAgent (#19)
-├── IPC server — Unix socket (#22)
-├── Event-driven wake (#20)
-├── Proactive alerts (#21)
-├── Global hotkey (#2)
-└── Voice input (#3)
-```
-
-### The "It's Jarvis" Moment — End of Week 2
-
-After weeks 1-2, you'll be able to:
-
-```
-You:     "Hey, what am I working on?"
-Jarvis:  "You're in VS Code editing agent-loop.ts on branch feat/memory.
-          3 uncommitted changes. Design Review starts in 25 min."
-
-You:     "Open Slack and tell the team I'll be 5 min late"
-Jarvis:  [Opens Slack → navigates → types → sends]
-         "Done. Sent to #team."
-
-You:     "What did I just copy?"
-Jarvis:  "A GitHub URL: github.com/DipeshRajoria007/assistant/pull/3.
-          Want me to open it?"
-```
-
-## Safety Model
-
-Every action goes through the safety gate before execution:
-
-| Level | Actions | Approval |
-|-------|---------|----------|
-| **SAFE** | Read screen, list files, check git | Auto-approve |
-| **LOW** | Open apps, type in fields | Auto + logged |
-| **MEDIUM** | Send messages, modify files | 5s countdown to cancel |
-| **HIGH** | Delete files, send emails | Explicit approval required |
-| **BLOCKED** | sudo, keychain, disable security | Always blocked |
-
-Full audit trail of every action. Undo support for reversible operations.
 
 ## License
 
 MIT
-
-## Contributing
-
-This project is built autonomously with Claude Code. To contribute:
-
-1. Fork the repo
-2. Create a feature branch
-3. Ensure `bun run check` passes (typecheck + lint + test + build)
-4. Open a PR
-
-Every feature must include tests. No exceptions.

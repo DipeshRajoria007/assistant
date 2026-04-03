@@ -1,5 +1,14 @@
-import { createAgentState, processMessage } from "./core/agent-loop.js";
-import { detectCLIs, loadConfig } from "./core/config.js";
+import {
+	HELP_TEXT,
+	PROMPT,
+	WELCOME_BANNER,
+	formatActions,
+	formatError,
+	formatResponse,
+	parseCommand,
+} from "./cli/formatter.js";
+import { createAgentState, processMessage, trimConversation } from "./core/agent-loop.js";
+import { detectCLIs, getCLIs, loadConfig } from "./core/config.js";
 import { createLogger, setLogLevel } from "./core/logger.js";
 
 const log = createLogger("main");
@@ -20,41 +29,93 @@ async function initDaemon() {
 		codex: clis.codex ?? "not found",
 	});
 
-	const state = createAgentState();
-	log.info("Agent ready. Waiting for input...");
-	return state;
+	return createAgentState();
 }
 
-async function handleLine(state: ReturnType<typeof createAgentState>, line: string): Promise<void> {
-	if (line === "/quit" || line === "/exit") {
-		log.info("Shutting down...");
-		process.exit(0);
-	}
+function write(text: string): void {
+	process.stdout.write(text);
+}
 
+function showStatus(state: ReturnType<typeof createAgentState>): void {
+	const clis = getCLIs();
+	write(`\nCLIs: claude=${clis.claude ?? "none"}, codex=${clis.codex ?? "none"}\n`);
+	write(`Messages in context: ${state.messages.length}\n`);
+	write(`Pending actions: ${state.pendingActions.length}\n\n`);
+}
+
+function showHistory(state: ReturnType<typeof createAgentState>): void {
+	const msgs = state.messages.filter((m) => m.role === "user").slice(-10);
+	if (msgs.length === 0) {
+		write("\nNo conversation history.\n\n");
+		return;
+	}
+	write("\nRecent messages:\n");
+	for (const msg of msgs) {
+		const preview = msg.content.length > 80 ? `${msg.content.slice(0, 80)}...` : msg.content;
+		write(`  > ${preview}\n`);
+	}
+	write("\n");
+}
+
+async function sendMessage(
+	state: ReturnType<typeof createAgentState>,
+	text: string,
+): Promise<void> {
 	try {
-		const response = await processMessage(state, line);
-		process.stdout.write(`\n${response.message}\n\n`);
-		printPendingActions(response.actions);
-		process.stdout.write("> ");
+		const response = await processMessage(state, text);
+		write(formatResponse(response.message, response.provider, response.durationMs));
+		const actionOutput = formatActions(response.actions);
+		if (actionOutput) write(actionOutput);
+		trimConversation(state);
 	} catch (error) {
-		log.error("Error processing message", error);
-		process.stdout.write(`Error: ${error instanceof Error ? error.message : String(error)}\n> `);
+		write(formatError(error instanceof Error ? error.message : String(error)));
 	}
 }
 
-function printPendingActions(actions: Awaited<ReturnType<typeof processMessage>>["actions"]): void {
-	if (actions.length === 0) return;
-	process.stdout.write("Pending actions:\n");
-	for (const action of actions) {
-		process.stdout.write(
-			`  [${action.approval}] ${action.description} (safety: ${action.safetyLevel})\n`,
-		);
+/** Returns false when the session should end */
+async function handleCommand(
+	state: ReturnType<typeof createAgentState>,
+	input: string,
+): Promise<boolean> {
+	const cmd = parseCommand(input);
+
+	switch (cmd.type) {
+		case "empty":
+			return true;
+		case "quit":
+			write("\nGoodbye.\n");
+			return false;
+		case "help":
+			write(HELP_TEXT);
+			return true;
+		case "clear":
+			state.messages.length = 1;
+			state.pendingActions = [];
+			write("\nConversation cleared.\n");
+			return true;
+		case "status":
+			showStatus(state);
+			return true;
+		case "goals":
+			write("\nNo active goals yet. Goals will be tracked as you work.\n\n");
+			return true;
+		case "history":
+			showHistory(state);
+			return true;
+		case "unknown":
+			write(formatError(`Unknown command: ${cmd.raw}. Type /help for commands.`));
+			return true;
+		case "message":
+			await sendMessage(state, cmd.raw);
+			return true;
 	}
-	process.stdout.write("\n");
 }
 
 async function main(): Promise<void> {
 	const state = await initDaemon();
+
+	write(WELCOME_BANNER);
+	write(PROMPT);
 
 	const reader = Bun.stdin.stream().getReader();
 	const decoder = new TextDecoder();
@@ -69,8 +130,9 @@ async function main(): Promise<void> {
 		buffer = lines.pop() ?? "";
 
 		for (const line of lines) {
-			const trimmed = line.trim();
-			if (trimmed) await handleLine(state, trimmed);
+			const shouldContinue = await handleCommand(state, line);
+			if (!shouldContinue) return;
+			write(PROMPT);
 		}
 	}
 }

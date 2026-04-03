@@ -137,7 +137,7 @@ macos/                          # (planned) Swift menu bar app
 
 | # | Feature | Description | Status |
 |---|---------|-------------|--------|
-| 1 | CLI chat mode | Interactive REPL — run `assistant` and chat in terminal | 🟡 Basic |
+| 1 | CLI chat mode | Interactive REPL with commands, colors, safety display | ✅ Done |
 | 2 | Global hotkey invoke | Press a hotkey from anywhere → input appears | ⬜ Planned |
 | 3 | Voice input | Push-to-talk via macOS Speech or Whisper | ⬜ Planned |
 | 4 | Voice output | Speaks responses via macOS `say` / TTS | ⬜ Planned |

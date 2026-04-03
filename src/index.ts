@@ -4,7 +4,6 @@ import {
 	WELCOME_BANNER,
 	formatActions,
 	formatError,
-	formatResponse,
 	parseCommand,
 } from "./cli/formatter.js";
 import { speak } from "./cli/speech.js";
@@ -66,8 +65,23 @@ async function sendMessage(
 	text: string,
 ): Promise<void> {
 	try {
-		const response = await processMessage(state, text);
-		write(formatResponse(response.message, response.provider, response.durationMs));
+		write("\n");
+		let firstChunk = true;
+
+		const response = await processMessage(state, text, undefined, (chunk: string) => {
+			if (firstChunk) {
+				firstChunk = false;
+			}
+			write(chunk);
+		});
+
+		// If streaming didn't output anything, print the full response
+		if (firstChunk && response.message) {
+			write(response.message);
+		}
+
+		write(`\n\x1b[2m[${response.provider} | ${response.durationMs}ms]\x1b[0m\n`);
+
 		const actionOutput = formatActions(response.actions);
 		if (actionOutput) write(actionOutput);
 		trimConversation(state);

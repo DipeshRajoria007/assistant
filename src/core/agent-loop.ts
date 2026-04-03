@@ -7,7 +7,7 @@ import type {
 } from "../types/action.js";
 import { createLogger } from "./logger.js";
 import { classifyComplexity, routeMessage } from "./model-router.js";
-import type { ChatMessage, RouterResponse } from "./model-router.js";
+import type { ChatMessage, RouterResponse, StreamCallback } from "./model-router.js";
 
 const log = createLogger("agent-loop");
 
@@ -74,22 +74,21 @@ export async function processMessage(
 	state: AgentState,
 	userMessage: string,
 	contextPrefix?: string,
+	onChunk?: StreamCallback,
 ): Promise<AgentResponse> {
 	state.status = "thinking";
 
-	// Build the full message with context
 	const fullMessage = contextPrefix
 		? `${contextPrefix}\n\nUser request: ${userMessage}`
 		: userMessage;
 
 	state.messages.push({ role: "user", content: fullMessage });
 
-	// Route to appropriate model
 	const complexity = classifyComplexity(userMessage);
 	let response: RouterResponse;
 
 	try {
-		response = await routeMessage(state.messages, complexity);
+		response = await routeMessage(state.messages, complexity, onChunk);
 	} catch (error) {
 		state.status = "error";
 		state.lastError = error instanceof Error ? error.message : String(error);

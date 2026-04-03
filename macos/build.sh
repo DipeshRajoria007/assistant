@@ -1,5 +1,5 @@
 #!/bin/bash
-# Build the hotkey daemon binary
+# Build all macOS Swift binaries
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -15,9 +15,20 @@ swiftc -O \
     -framework Carbon \
     2>&1
 
-echo "Built: $OUT_DIR/assistant-hotkey"
+echo "Building assistant-voice..."
+swiftc -O \
+    -o "$OUT_DIR/assistant-voice" \
+    "$SCRIPT_DIR/voice-input.swift" \
+    -framework Speech \
+    -framework AVFoundation \
+    2>&1
+
 echo ""
-echo "To start the hotkey daemon:"
-echo "  ./dist/assistant-hotkey"
+echo "Built:"
+echo "  $OUT_DIR/assistant-hotkey  (global hotkey: Ctrl+Space)"
+echo "  $OUT_DIR/assistant-voice   (speech-to-text)"
 echo ""
-echo "Then press Ctrl+Space from anywhere to invoke the assistant."
+echo "Usage:"
+echo "  ./dist/assistant-hotkey              # Start hotkey daemon"
+echo "  ./dist/assistant-voice               # Record once, output text"
+echo "  ./dist/assistant-voice --listen      # Continuous listen mode"

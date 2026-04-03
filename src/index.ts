@@ -83,11 +83,11 @@ async function sendMessage(
 async function handleVoice(state: ReturnType<typeof createAgentState>): Promise<void> {
 	const available = await isVoiceAvailable();
 	if (!available) {
-		write(formatError("Voice binary not found. Run: bun run hotkey:build"));
+		write(formatError("No voice method available. Need ffmpeg + claude CLI installed."));
 		return;
 	}
 
-	write("\nListening... speak now.\n");
+	write("\nRecording... speak now (10s max).\n");
 	const result = await captureVoiceInput();
 
 	if (!result.success || !result.text) {

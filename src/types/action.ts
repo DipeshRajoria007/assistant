@@ -93,10 +93,10 @@ export interface ApiPayload {
 export interface ActionResult {
 	actionId: string;
 	success: boolean;
-	output?: string;
-	error?: string;
-	screenshotBefore?: string;
-	screenshotAfter?: string;
+	output?: string | undefined;
+	error?: string | undefined;
+	screenshotBefore?: string | undefined;
+	screenshotAfter?: string | undefined;
 	timestamp: Date;
 	durationMs: number;
 }

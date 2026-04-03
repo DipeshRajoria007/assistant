@@ -1,16 +1,23 @@
 import { createAgentState, processMessage } from "./core/agent-loop.js";
-import { loadConfig } from "./core/config.js";
+import { detectCLIs, loadConfig } from "./core/config.js";
 import { createLogger, setLogLevel } from "./core/logger.js";
 
 const log = createLogger("main");
 
-function initDaemon() {
+async function initDaemon() {
 	const config = loadConfig();
 	setLogLevel(config.logLevel);
 
+	const clis = await detectCLIs();
+
+	if (!clis.claude && !clis.codex) {
+		throw new Error("No AI CLI found. Install Claude Code or Codex CLI.");
+	}
+
 	log.info("Assistant starting", {
 		autonomyLevel: config.defaultAutonomyLevel,
-		embeddingProvider: config.embeddingProvider,
+		claude: clis.claude ?? "not found",
+		codex: clis.codex ?? "not found",
 	});
 
 	const state = createAgentState();
@@ -47,7 +54,7 @@ function printPendingActions(actions: Awaited<ReturnType<typeof processMessage>>
 }
 
 async function main(): Promise<void> {
-	const state = initDaemon();
+	const state = await initDaemon();
 
 	const reader = Bun.stdin.stream().getReader();
 	const decoder = new TextDecoder();

@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, test } from "bun:test";
-import { classifyComplexity, getModelForComplexity } from "../../src/core/model-router.js";
+import { classifyComplexity, getProviderForComplexity } from "../../src/core/model-router.js";
 import { setupTestConfig } from "../setup.js";
 
 describe("classifyComplexity", () => {
@@ -12,6 +12,16 @@ describe("classifyComplexity", () => {
 	test("classifies time questions as triage", () => {
 		expect(classifyComplexity("What time is my next meeting?")).toBe("triage");
 		expect(classifyComplexity("What date is the deadline?")).toBe("triage");
+	});
+
+	test("classifies code generation as code", () => {
+		expect(classifyComplexity("Write a function to sort an array")).toBe("code");
+		expect(classifyComplexity("Create a React component for the sidebar")).toBe("code");
+		expect(classifyComplexity("Fix the bug in the auth code")).toBe("code");
+	});
+
+	test("classifies code review as code", () => {
+		expect(classifyComplexity("Review the code in this pull request")).toBe("code");
 	});
 
 	test("classifies planning/reasoning as complex", () => {
@@ -33,7 +43,6 @@ describe("classifyComplexity", () => {
 	test("classifies simple requests as simple", () => {
 		expect(classifyComplexity("Open Slack")).toBe("simple");
 		expect(classifyComplexity("Send a message to the team")).toBe("simple");
-		expect(classifyComplexity("Create a new file called test.ts")).toBe("simple");
 	});
 
 	test("classifies compound tasks as complex", () => {
@@ -43,20 +52,32 @@ describe("classifyComplexity", () => {
 	});
 });
 
-describe("getModelForComplexity", () => {
+describe("getProviderForComplexity", () => {
 	beforeEach(() => {
 		setupTestConfig();
 	});
 
-	test("returns haiku for triage", () => {
-		expect(getModelForComplexity("triage")).toBe("claude-haiku-4-5-20251001");
+	test("returns claude for triage by default", () => {
+		expect(getProviderForComplexity("triage")).toBe("claude");
 	});
 
-	test("returns sonnet for simple", () => {
-		expect(getModelForComplexity("simple")).toBe("claude-sonnet-4-6-20260320");
+	test("returns claude for simple by default", () => {
+		expect(getProviderForComplexity("simple")).toBe("claude");
 	});
 
-	test("returns opus for complex", () => {
-		expect(getModelForComplexity("complex")).toBe("claude-opus-4-6-20260320");
+	test("returns claude for complex by default", () => {
+		expect(getProviderForComplexity("complex")).toBe("claude");
+	});
+
+	test("returns codex for code by default", () => {
+		expect(getProviderForComplexity("code")).toBe("codex");
+	});
+
+	test("respects custom routing config", () => {
+		setupTestConfig({
+			routing: { triage: "codex", simple: "codex", complex: "claude", code: "codex" },
+		});
+		expect(getProviderForComplexity("triage")).toBe("codex");
+		expect(getProviderForComplexity("simple")).toBe("codex");
 	});
 });

@@ -34,8 +34,8 @@ export interface AgentResponse {
 	message: string;
 	actions: PendingAction[];
 	complexity: ReturnType<typeof classifyComplexity>;
-	modelUsed: string;
-	tokenUsage: { input: number; output: number };
+	provider: string;
+	durationMs: number;
 }
 
 /** System prompt that defines the assistant's behavior */
@@ -126,7 +126,7 @@ export async function processMessage(
 
 	log.info("Message processed", {
 		complexity,
-		model: response.model,
+		provider: response.provider,
 		actions: pendingActions.length,
 		needsApproval: pendingActions.filter((a) => a.approval === "approved").length,
 	});
@@ -135,11 +135,8 @@ export async function processMessage(
 		message: response.content,
 		actions: pendingActions,
 		complexity,
-		modelUsed: response.model,
-		tokenUsage: {
-			input: response.inputTokens,
-			output: response.outputTokens,
-		},
+		provider: response.provider,
+		durationMs: response.durationMs,
 	};
 }
 

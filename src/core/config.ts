@@ -1,20 +1,23 @@
 import { z } from "zod";
 
 const ConfigSchema = z.object({
-	anthropicApiKey: z.string().min(1).optional(),
-	openaiApiKey: z.string().min(1).optional(),
-	ollamaBaseUrl: z.string().url().optional(),
+	/** Path to claude CLI binary (auto-detected if not set) */
+	claudePath: z.string().optional(),
+	/** Path to codex CLI binary (auto-detected if not set) */
+	codexPath: z.string().optional(),
+	/** Default autonomy level: 0=ask everything, 4=full auto */
 	defaultAutonomyLevel: z.number().int().min(0).max(4).default(1),
-	embeddingProvider: z.enum(["anthropic", "openai", "ollama"]).default("anthropic"),
 	dbPath: z.string().default("data/assistant.db"),
 	socketPath: z.string().default("/tmp/assistant.sock"),
 	logLevel: z.enum(["debug", "info", "warn", "error"]).default("info"),
 	maxContextTokens: z.number().int().positive().default(8000),
-	modelRouting: z
+	/** Which CLI to use for which task type */
+	routing: z
 		.object({
-			triage: z.string().default("claude-haiku-4-5-20251001"),
-			simple: z.string().default("claude-sonnet-4-6-20260320"),
-			complex: z.string().default("claude-opus-4-6-20260320"),
+			triage: z.enum(["claude", "codex"]).default("claude"),
+			simple: z.enum(["claude", "codex"]).default("claude"),
+			complex: z.enum(["claude", "codex"]).default("claude"),
+			code: z.enum(["claude", "codex"]).default("codex"),
 		})
 		.default({}),
 	safety: z
@@ -28,15 +31,42 @@ const ConfigSchema = z.object({
 
 export type Config = z.infer<typeof ConfigSchema>;
 
+/** Which CLIs are available on this machine */
+export interface DetectedCLIs {
+	claude: string | null;
+	codex: string | null;
+}
+
 let _config: Config | null = null;
+let _detectedCLIs: DetectedCLIs | null = null;
+
+/** Detect which AI CLIs are installed */
+export async function detectCLIs(): Promise<DetectedCLIs> {
+	if (_detectedCLIs) return _detectedCLIs;
+
+	const [claudePath, codexPath] = await Promise.all([findBinary("claude"), findBinary("codex")]);
+
+	_detectedCLIs = { claude: claudePath, codex: codexPath };
+	return _detectedCLIs;
+}
+
+async function findBinary(name: string): Promise<string | null> {
+	try {
+		const proc = Bun.spawn(["which", name], { stdout: "pipe", stderr: "pipe" });
+		const exitCode = await proc.exited;
+		if (exitCode !== 0) return null;
+		const output = await new Response(proc.stdout).text();
+		return output.trim() || null;
+	} catch {
+		return null;
+	}
+}
 
 export function loadConfig(overrides?: Partial<Config>): Config {
 	const raw = {
-		anthropicApiKey: process.env.ANTHROPIC_API_KEY,
-		openaiApiKey: process.env.OPENAI_API_KEY,
-		ollamaBaseUrl: process.env.OLLAMA_BASE_URL,
+		claudePath: process.env.CLAUDE_PATH,
+		codexPath: process.env.CODEX_PATH,
 		defaultAutonomyLevel: parseIntOr(process.env.DEFAULT_AUTONOMY_LEVEL, 1),
-		embeddingProvider: process.env.EMBEDDING_PROVIDER ?? "anthropic",
 		logLevel: process.env.LOG_LEVEL ?? "info",
 		...overrides,
 	};
@@ -45,13 +75,6 @@ export function loadConfig(overrides?: Partial<Config>): Config {
 	if (!result.success) {
 		const errors = result.error.issues.map((i) => `  ${i.path.join(".")}: ${i.message}`);
 		throw new Error(`Invalid configuration:\n${errors.join("\n")}`);
-	}
-
-	// Require at least one LLM provider
-	if (!result.data.anthropicApiKey && !result.data.openaiApiKey && !result.data.ollamaBaseUrl) {
-		throw new Error(
-			"At least one LLM provider must be configured (ANTHROPIC_API_KEY, OPENAI_API_KEY, or OLLAMA_BASE_URL)",
-		);
 	}
 
 	_config = result.data;
@@ -63,6 +86,14 @@ export function getConfig(): Config {
 		throw new Error("Config not loaded. Call loadConfig() first.");
 	}
 	return _config;
+}
+
+/** Get detected CLIs (must call detectCLIs first) */
+export function getCLIs(): DetectedCLIs {
+	if (!_detectedCLIs) {
+		throw new Error("CLIs not detected. Call detectCLIs() first.");
+	}
+	return _detectedCLIs;
 }
 
 function parseIntOr(value: string | undefined, fallback: number): number {

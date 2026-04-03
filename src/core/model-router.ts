@@ -1,13 +1,15 @@
-import Anthropic from "@anthropic-ai/sdk";
-import { getConfig } from "./config.js";
+import { getCLIs, getConfig } from "./config.js";
 import { createLogger } from "./logger.js";
 
 const log = createLogger("model-router");
 
-/** Task complexity determines which model handles the request */
-export type TaskComplexity = "triage" | "simple" | "complex";
+/** Task complexity determines which CLI/model handles the request */
+export type TaskComplexity = "triage" | "simple" | "complex" | "code";
 
-/** Message format compatible across providers */
+/** Which CLI to use */
+export type CLIProvider = "claude" | "codex";
+
+/** Message format for conversations */
 export interface ChatMessage {
 	role: "user" | "assistant" | "system";
 	content: string;
@@ -15,13 +17,11 @@ export interface ChatMessage {
 
 export interface RouterResponse {
 	content: string;
-	model: string;
-	inputTokens: number;
-	outputTokens: number;
+	provider: CLIProvider;
 	durationMs: number;
 }
 
-/** Classify how complex a task is — determines model routing */
+/** Classify how complex a task is — determines routing */
 export function classifyComplexity(input: string): TaskComplexity {
 	const lower = input.toLowerCase();
 
@@ -36,91 +36,159 @@ export function classifyComplexity(input: string): TaskComplexity {
 		return "triage";
 	}
 
-	// Complex: multi-step, planning, reasoning, long inputs
+	// Complex: multi-step, planning, reasoning, long inputs (checked before code)
 	const complexPatterns = [
-		/\b(plan|design|architect|implement|refactor|debug|analyze|compare|evaluate)\b/,
+		/\b(plan|design|architect|analyze|compare|evaluate)\b/,
 		/\b(step.by.step|break.down|think.through|figure.out)\b/,
 		/\b(why|how|explain.in.detail|what.are.the.tradeoffs)\b/,
-		/\band\b.*\band\b.*\band\b/, // multiple "and"s suggest compound task
+		/\band\b.*\band\b.*\band\b/,
 	];
 	if (complexPatterns.some((p) => p.test(lower)) || input.length > 500) {
 		return "complex";
 	}
 
-	// Default to simple
+	// Code tasks: writing, fixing, reviewing code
+	const codePatterns = [
+		/\b(write|create|generate|implement)\b.*\b(code|function|class|component|module|test|file)\b/,
+		/\b(fix|debug|patch|refactor)\b.*\b(bug|error|code|function)\b/,
+		/\b(review|optimize)\b.*\b(code|pull request|pr|diff)\b/,
+		/```/, // contains code blocks
+	];
+	if (codePatterns.some((p) => p.test(lower))) {
+		return "code";
+	}
+
 	return "simple";
 }
 
-/** Get the model ID for a given complexity level */
-export function getModelForComplexity(complexity: TaskComplexity): string {
+/** Get which CLI provider to use for a given complexity */
+export function getProviderForComplexity(complexity: TaskComplexity): CLIProvider {
 	const config = getConfig();
-	const routing = config.modelRouting;
-
-	switch (complexity) {
-		case "triage":
-			return routing.triage;
-		case "simple":
-			return routing.simple;
-		case "complex":
-			return routing.complex;
-	}
+	return config.routing[complexity];
 }
 
-/** Send a message to the appropriate model based on complexity */
+/** Send a message to the appropriate CLI based on complexity */
 export async function routeMessage(
 	messages: ChatMessage[],
 	complexity?: TaskComplexity,
 ): Promise<RouterResponse> {
 	const lastUserMessage = messages.findLast((m: ChatMessage) => m.role === "user");
 	const autoComplexity = complexity ?? classifyComplexity(lastUserMessage?.content ?? "");
-	const model = getModelForComplexity(autoComplexity);
+	const provider = getProviderForComplexity(autoComplexity);
 
-	log.info(`Routing to ${model}`, { complexity: autoComplexity });
+	log.info(`Routing to ${provider}`, { complexity: autoComplexity });
 
 	const start = performance.now();
-	const response = await callAnthropic(messages, model);
+
+	// Build the prompt from messages
+	const systemMessage = messages.find((m) => m.role === "system");
+	const prompt = buildPrompt(messages, systemMessage?.content);
+
+	const content = await callCLI(provider, prompt);
 	const durationMs = Math.round(performance.now() - start);
 
-	log.info("Response received", {
-		model,
-		inputTokens: response.inputTokens,
-		outputTokens: response.outputTokens,
-		durationMs,
-	});
+	log.info("Response received", { provider, durationMs });
 
-	return { ...response, durationMs };
+	return { content, provider, durationMs };
 }
 
-async function callAnthropic(messages: ChatMessage[], model: string): Promise<RouterResponse> {
-	const config = getConfig();
-	if (!config.anthropicApiKey) {
-		throw new Error("Anthropic API key not configured");
+/** Build a single prompt string from conversation messages */
+function buildPrompt(messages: ChatMessage[], systemPrompt?: string): string {
+	const parts: string[] = [];
+
+	if (systemPrompt) {
+		parts.push(systemPrompt);
 	}
 
-	const client = new Anthropic({ apiKey: config.anthropicApiKey });
+	// Include recent conversation context (last few exchanges)
+	const conversationMessages = messages.filter((m) => m.role !== "system").slice(-6);
+	for (const msg of conversationMessages) {
+		if (msg.role === "user") {
+			parts.push(msg.content);
+		} else if (msg.role === "assistant") {
+			parts.push(`[Previous response]: ${msg.content.slice(0, 500)}`);
+		}
+	}
 
-	const systemMessage = messages.find((m) => m.role === "system");
-	const chatMessages = messages
-		.filter((m) => m.role !== "system")
-		.map((m) => ({
-			role: m.role as "user" | "assistant",
-			content: m.content,
-		}));
+	return parts.join("\n\n");
+}
 
-	const response = await client.messages.create({
-		model,
-		max_tokens: 4096,
-		system: systemMessage?.content ?? "",
-		messages: chatMessages,
+/** Call a CLI tool and return the response text */
+async function callCLI(provider: CLIProvider, prompt: string): Promise<string> {
+	const clis = getCLIs();
+
+	if (provider === "claude") {
+		return callClaude(clis.claude, prompt);
+	}
+	return callCodex(clis.codex, prompt);
+}
+
+async function callClaude(binaryPath: string | null, prompt: string): Promise<string> {
+	if (!binaryPath) {
+		throw new Error("Claude CLI not found. Install it from https://claude.ai/download");
+	}
+
+	const proc = Bun.spawn([binaryPath, "-p", "--output-format", "text", prompt], {
+		stdout: "pipe",
+		stderr: "pipe",
 	});
 
-	const content = response.content[0]?.type === "text" ? (response.content[0]?.text ?? "") : "";
+	const exitCode = await proc.exited;
+	const stdout = await new Response(proc.stdout).text();
+	const stderr = await new Response(proc.stderr).text();
 
-	return {
-		content,
-		model,
-		inputTokens: response.usage.input_tokens,
-		outputTokens: response.usage.output_tokens,
-		durationMs: 0, // filled by caller
-	};
+	if (exitCode !== 0) {
+		log.error("Claude CLI failed", { exitCode, stderr });
+		throw new Error(`Claude CLI exited with code ${exitCode}: ${stderr.slice(0, 200)}`);
+	}
+
+	return stdout.trim();
+}
+
+async function callCodex(binaryPath: string | null, prompt: string): Promise<string> {
+	if (!binaryPath) {
+		throw new Error("Codex CLI not found. Install it via npm: npm i -g @openai/codex");
+	}
+
+	const proc = Bun.spawn([binaryPath, "exec", prompt], { stdout: "pipe", stderr: "pipe" });
+
+	const exitCode = await proc.exited;
+	const stdout = await new Response(proc.stdout).text();
+	const stderr = await new Response(proc.stderr).text();
+
+	if (exitCode !== 0) {
+		log.error("Codex CLI failed", { exitCode, stderr });
+		throw new Error(`Codex CLI exited with code ${exitCode}: ${stderr.slice(0, 200)}`);
+	}
+
+	// Codex output includes metadata — extract just the response
+	return parseCodexOutput(stdout);
+}
+
+/** Extract the actual response from Codex CLI output (strips metadata) */
+function parseCodexOutput(raw: string): string {
+	// Codex output has headers and a "codex\n" prefix before actual content
+	const lines = raw.split("\n");
+
+	// Find where actual content starts (after "codex" line or metadata)
+	let contentStart = 0;
+	for (let i = 0; i < lines.length; i++) {
+		const line = lines[i];
+		if (line === "codex") {
+			contentStart = i + 1;
+			break;
+		}
+	}
+
+	// Find where content ends (before "tokens used" or similar footer)
+	let contentEnd = lines.length;
+	for (let i = lines.length - 1; i >= contentStart; i--) {
+		const line = lines[i];
+		if (line === "tokens used" || line?.startsWith("tokens used")) {
+			contentEnd = i;
+			break;
+		}
+	}
+
+	return lines.slice(contentStart, contentEnd).join("\n").trim();
 }

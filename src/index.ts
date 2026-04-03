@@ -7,6 +7,7 @@ import {
 	formatResponse,
 	parseCommand,
 } from "./cli/formatter.js";
+import { captureVoiceInput, isVoiceAvailable } from "./cli/voice.js";
 import { createAgentState, processMessage, trimConversation } from "./core/agent-loop.js";
 import { detectCLIs, getCLIs, loadConfig } from "./core/config.js";
 import { createLogger, setLogLevel } from "./core/logger.js";
@@ -72,6 +73,25 @@ async function sendMessage(
 	}
 }
 
+async function handleVoice(state: ReturnType<typeof createAgentState>): Promise<void> {
+	const available = await isVoiceAvailable();
+	if (!available) {
+		write(formatError("Voice binary not found. Run: bun run hotkey:build"));
+		return;
+	}
+
+	write("\nListening... speak now.\n");
+	const result = await captureVoiceInput();
+
+	if (!result.success || !result.text) {
+		write(formatError(result.error ?? "No speech detected. Try again."));
+		return;
+	}
+
+	write(`\nYou said: "${result.text}"\n`);
+	await sendMessage(state, result.text);
+}
+
 /** Returns false when the session should end */
 async function handleCommand(
 	state: ReturnType<typeof createAgentState>,
@@ -101,6 +121,9 @@ async function handleCommand(
 			return true;
 		case "history":
 			showHistory(state);
+			return true;
+		case "voice":
+			await handleVoice(state);
 			return true;
 		case "unknown":
 			write(formatError(`Unknown command: ${cmd.raw}. Type /help for commands.`));

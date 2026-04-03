@@ -139,7 +139,7 @@ macos/                          # (planned) Swift menu bar app
 |---|---------|-------------|--------|
 | 1 | CLI chat mode | Interactive REPL with commands, colors, safety display | ✅ Done |
 | 2 | Global hotkey invoke | Ctrl+Space from anywhere activates assistant | ✅ Done |
-| 3 | Voice input | Push-to-talk via macOS Speech or Whisper | ⬜ Planned |
+| 3 | Voice input | Push-to-talk with on-device Apple Speech Recognition | ✅ Done |
 | 4 | Voice output | Speaks responses via macOS `say` / TTS | ⬜ Planned |
 
 ### Phase 2: Give It Eyes — *"Know What I'm Doing"*
